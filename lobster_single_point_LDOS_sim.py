@@ -196,7 +196,7 @@ class ldos_single_point:
 
     def print_top_contributions(self, ldos, percentage=10):
         """
-        Print the most relevant states based on the top contributions.
+        Print the most relevant states based on the normalized top contributions.
         """
         contributions = []
     
@@ -214,17 +214,19 @@ class ldos_single_point:
         if not contributions:
             raise ValueError("No valid contributions found. Ensure LDOS data is correctly calculated.")
     
-        # Sort and print contributions
-        contributions.sort(reverse=True, key=lambda x: x[0])
-        top_count = max(1, int(len(contributions) * percentage / 100))
+        # Normalize contributions: Find the maximum contribution
+        max_contribution = max(contributions, key=lambda x: x[0])[0]
+        normalized_contributions = [(contribution / max_contribution, atom_idx, orbital)
+                                     for contribution, atom_idx, orbital in contributions]
     
-        print("\nTop Contributions to LDOS:")
+        # Sort and print normalized contributions
+        normalized_contributions.sort(reverse=True, key=lambda x: x[0])
+        top_count = max(1, int(len(normalized_contributions) * percentage / 100))
+    
+        print("\nTop Contributions to LDOS (Normalized):")
         for i in range(top_count):
-            contribution, atom_idx, orbital = contributions[i]
-            print(f"Atom #{atom_idx}, Orbital {orbital}: Contribution = {contribution}")
-
-
-
+            normalized_value, atom_idx, orbital = normalized_contributions[i]
+            print(f"Atom #{atom_idx}, Orbital {orbital}: Contribution = {normalized_value:.3f}")
 
 
 
