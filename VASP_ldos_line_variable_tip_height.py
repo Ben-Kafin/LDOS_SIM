@@ -14,12 +14,12 @@ import copy
 from scipy.integrate import simpson
 
 #EXAMPLE CONSOLE INPUT FOR LDOS LINE SIM
-#test = ldos_line('C:/Users/Benjamin/Documents/VASP/NHC/iPr/SAM/NHC2Au_complexes/p2/spinorb/freegold1/freegold2/freegold3/kpoints551')
+#test = ldos_line('filepath/')
 #test.parse_VASP_output()
 #test.calculate_ldos(64, 0.21, 0.19,np.array([-1,-1,0]),np.array([0.77193,0.71930,0]), tip_disp=15, unit_cell_num=1, phi=5.25)
 #test.plot_map(cmap='vivid',show_colorbar=True)
 #ldos_data=test.plot_energy_slice(0.2)
-#test1 = ldos_line('C:/Users/Benjamin/Documents/VASP/NHC/iPr/SAM/NHC2Au_complexes/p2/spinorb/freegold1/freegold2/freegold3/kpoints551')
+#test1 = ldos_line('filepath/')
 #test1.parse_VASP_output()
 #test1.calculate_ldos(64, 1.1, -2.2,np.array([-1,-1,0]),np.array([0.77193,0.71930,0]), tip_scaler=1, ldos_data=ldos_data, tip_dist=7.5,unit_cell_num=1, phi=5.25)
 #test1.normalize_position_slices(norm_range='full')
