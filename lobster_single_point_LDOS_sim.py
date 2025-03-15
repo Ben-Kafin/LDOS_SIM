@@ -232,7 +232,7 @@ class ldos_single_point:
 
 # Example Usage
 if __name__ == "__main__":
-    filepath = 'C:/Users/Benjamin Kafin/Documents/VASP/NHC_Cu/freeCu1/freeCu2/lobster/'  # Directory containing output files
+    filepath = 'filepath/'  # Directory containing output files
     spatial_position = np.array([5.00807, 8.66844, 23])  # Tip position
     emin, emax = -2.0, 2.0  # Energy range (eV)
     phi=4.5
