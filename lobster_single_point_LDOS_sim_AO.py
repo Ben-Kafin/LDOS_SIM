@@ -243,10 +243,7 @@ if __name__ == "__main__":
 
     # Calculate LDOS at a single point
     ldos = ldos_calc.calculate_single_point_ldos(spatial_position, emin, emax, phi, V)
-    
-    # Call print_top_contributions method
-    ldos_calc.print_top_contributions(ldos, percentage=5)
-    
+
     # Plot the LDOS curve
     ldos_calc.plot_ldos_curve(ldos, emin, emax)
 
