@@ -101,7 +101,6 @@ class ldos_single_point:
         self.ef = self.doscar.tdos.efermi
         self.pdos = self.doscar.pdos  # Orbital-projected DOS data
 
-
     def calculate_single_point_ldos(self, position, emin, emax, phi, V):
         tip_pos = np.array([position[0], position[1], np.mean(self.coord[:, 2]) + self.tip_disp])
     
@@ -129,7 +128,7 @@ class ldos_single_point:
     
                     # Tunneling weights
                     tunneling_weights = np.array(
-                        [tunneling_factor(V, E, phi) * exp(-distance) for E in energy_range]
+                        [tunneling_factor(V, E, phi) * exp(-distance*5e-2) for E in energy_range]
                     )
     
                     # Calculate LDOS contribution
@@ -142,78 +141,87 @@ class ldos_single_point:
 
     def plot_ldos_curve(self, ldos, emin, emax):
         """
-        Plot the LDOS curve for total, individual orbital contributions, and by atom number.
+        Plot the total LDOS and filtered atomic orbital LDOS, normalizing the total LDOS
+        to the sum of the areas of significant atomic orbital LDOS contributions.
         
         Parameters:
             ldos (dict): LDOS values for each atom, orbital, and spin component.
             emin (float): Minimum energy (eV) for the plot range.
             emax (float): Maximum energy (eV) for the plot range.
         """
+        # Get the energy range for plotting
         energy_range = self.energies[self.estart:self.eend]
         
         # Initialize total LDOS array
         total_ldos = np.zeros_like(energy_range)
         
-        plt.figure(figsize=(12, 8))
-        
-        # Generate distinct colors for atoms
-        atom_colors = plt.cm.viridis(np.linspace(0, 1, len(self.coord)))
-        
-        for atom_idx, atom_ldos in ldos.items():
-            atom_total_ldos = np.zeros_like(energy_range)
-            for orbital, spin_data in atom_ldos.items():
-                orbital_ldos = np.zeros_like(energy_range)
-                for spin, ldos_values in spin_data.items():
-                    orbital_ldos += ldos_values
-                atom_total_ldos += orbital_ldos
-                plt.plot(
-                    energy_range, orbital_ldos, 
-                    label=f"Atom {atom_idx + 1}, Orbital {orbital}",
-                    color=atom_colors[atom_idx],
-                    linestyle="-", alpha=0.6
-                )
-            total_ldos += atom_total_ldos
-        
-        plt.plot(energy_range, total_ldos, label="Total LDOS", color="black", linewidth=2, linestyle="--")
-        plt.xlabel("Energy (eV)")
-        plt.ylabel("LDOS (states/eV)")
-        plt.title("Local Density of States (LDOS) by Atom and Orbital")
-        plt.legend(fontsize="small", loc="best")
-        plt.grid(True)
-        plt.show()
-
-
-
-
-
-    def print_top_contributions(self, ldos, percentage=10):
-        contributions = []
+        # Dictionary to store areas for normalization
+        areas = {}
     
+        # Generate distinct colors for each atom
+        atom_colors = plt.cm.tab10(np.linspace(0, 1, len(self.coord)))
+    
+        # Calculate total LDOS and individual contributions
         for atom_idx, atom_pdos in ldos.items():
             for orbital, spin_data in atom_pdos.items():
-                spin_up = spin_data.get(Spin.up, np.zeros_like(self.energies[self.estart:self.eend]))
-                spin_down = spin_data.get(Spin.down, np.zeros_like(self.energies[self.estart:self.eend]))
-                total_contribution = np.sum(spin_up) + np.sum(spin_down)
-                contributions.append((total_contribution, atom_idx, orbital))
+                orbital_ldos = np.zeros_like(energy_range)
+                
+                # Combine contributions from both spins
+                for spin, ldos_values in spin_data.items():
+                    orbital_ldos += ldos_values
+                
+                # Integrate area under the curve (using trapezoidal rule)
+                area = np.trapz(orbital_ldos, energy_range)
+                areas[(atom_idx, orbital)] = area
+                
+                # Add to total LDOS
+                total_ldos += orbital_ldos
     
-        # Sort contributions in descending order
-        contributions.sort(reverse=True, key=lambda x: x[0])
-    
-        # Determine the number of top contributions to print
-        top_count = max(1, int(len(contributions) * percentage / 100))
-    
-        print("\nTop Contributions to LDOS:")
-        for i in range(top_count):
-            contribution, atom_idx, orbital = contributions[i]
-            print(f"Atom {atom_idx}, Orbital {orbital}: Contribution = {contribution}")
-
-
-
-
-
-
-
-
+        # Normalize areas so the largest is 1
+        max_area = max(areas.values())
+        normalized_areas = {key: area / max_area for key, area in areas.items()}
+        
+        # Filter to include only curves with normalized area > 0.75
+        filtered_areas = {key: area for key, area in normalized_areas.items() if area > 0.9}
+        
+        # Calculate the sum of the areas of the filtered atomic orbital LDOS
+        significant_area_sum = sum(areas[key] for key in filtered_areas.keys())
+        
+        # Scale the total LDOS to match the sum of the significant areas
+        total_area = np.trapz(total_ldos, energy_range)
+        if total_area > 0:  # Prevent division by zero
+            total_ldos *= significant_area_sum / total_area
+        
+        # Prepare the plot
+        plt.figure(figsize=(12, 8))
+        
+        # Plot the scaled total LDOS
+        plt.plot(
+            energy_range, total_ldos, label="Total LDOS (Normalized)", 
+            color="black", linewidth=2, linestyle="--"
+        )
+        
+        # Plot the filtered contributions
+        for (atom_idx, orbital), area in filtered_areas.items():
+            orbital_ldos = np.zeros_like(energy_range)
+            for spin, ldos_values in ldos[atom_idx][orbital].items():
+                orbital_ldos += ldos_values
+            
+            plt.plot(
+                energy_range, orbital_ldos, 
+                label=f"Atom {atom_idx + 1}, Orbital {orbital} (Normalized Area: {normalized_areas[(atom_idx, orbital)]:.2f})",
+                color=atom_colors[atom_idx],
+                alpha=0.7
+            )
+        
+        # Add labels, title, and legend
+        plt.xlabel("Energy (eV)")
+        plt.ylabel("LDOS (states/eV)")
+        plt.title("Filtered and Normalized LDOS (Total LDOS Scaled)")
+        plt.legend(fontsize="small", loc="best", ncol=2, frameon=True)
+        plt.grid(True)
+        plt.tight_layout()
+        plt.show()
 
 
 
