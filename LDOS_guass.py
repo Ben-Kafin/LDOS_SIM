@@ -390,8 +390,8 @@ if __name__ == "__main__":
     
     simulation_mode = 'line'
 
-    vasp_directory = r'E:/VASP/NHC/IPR/SAM/NHC2Au_complexes/p2/spinpol/freegold1/freegold2/freegold3/kpoints551'
-    #    vasp_directory = r'C:/Users/Benjamin Kafin/Documents/VASP/SAM/zigzag/kpoints551'
+    vasp_directory = r'dir'
+    #    vasp_directory = r'dir'
     locpot_file_path = "LOCPOT"
     surface_detection_mode = 'bulk'
     bulk_atom_type = 'Au' 
@@ -446,4 +446,5 @@ if __name__ == "__main__":
                          scaler=tip_height_scaler, base_dist=base_tip_distance, plot_cells=plot_supercell,
                          locpot_path=locpot_file_path, surface_mode=surface_detection_mode,
                          bulk_atom_type=bulk_atom_type,
+
                          cmap_ldos=cmap_ldos, cmap_topo=cmap_topo, normalize_spectra=normalize_final_spectra)
