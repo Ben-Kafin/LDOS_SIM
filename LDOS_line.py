@@ -250,8 +250,7 @@ class STM_Simulator:
         plt.show()
 
 if __name__ == "__main__":
-    #v_dir = r'E:/VASP/NHC/IPR/SAM/NHC2Au_complexes/p2/spinpol/freegold1/freegold2/freegold3/kpoints551'
-    v_dir = r'C:/Users/Benjamin Kafin/Documents/VASP/SAM/zigzag/kpoints551/dpl_corr/kp551'
+    v_dir = r'dir'
     sim = STM_Simulator(v_dir)
     #my_slices = [29.5, 37.6]
     my_slices = [17.64, 24.79]
@@ -264,4 +263,5 @@ if __name__ == "__main__":
         locpot_path="LOCPOT", surface_mode='bulk', bulk_atom_type='Au',
         cmap_ldos='jet', cmap_topo=LinearSegmentedColormap.from_list("t", ["black", "firebrick", "yellow"]),
         normalize_spectra=False, highlight_positions=my_slices
+
     )
