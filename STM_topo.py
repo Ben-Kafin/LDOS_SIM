@@ -245,8 +245,9 @@ class STM_Image_Simulator:
 
 if __name__ == "__main__":
     custom_topo = LinearSegmentedColormap.from_list("custom_topo", ["black", "firebrick", "yellow"])
-    vasp_dir = r'E:/VASP/NHC/IPR/SAM/NHC2Au_complexes/p2/spinpol/freegold1/freegold2/freegold3/kpoints551'
+    vasp_dir = r'dir'
     sim = STM_Image_Simulator(vasp_dir)
     sim.parse_vasp_outputs(locpot_path="LOCPOT", bulk_atom_type='Au')
     sim.run_stm_image(grid_res=64, topo_bias=0.2, const_height=0.75, plot_cells=2, cmap_topo=custom_topo)
+
     sim.save_topography_data("Converged_STM_FullCell_GPU_Vectorized.npy")
