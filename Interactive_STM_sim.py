@@ -55,7 +55,7 @@ class Unified_STM_Simulator:
         print(f"--- INITIALIZING GPU TENSOR SIMULATOR (RTX 4080) ---")
 
     def _converge_tip_height(self, z_map_gpu, grid_xy_gpu, emin, emax, target_ldos, 
-                             target_threshold=0.01, topo_gain=0.5, max_iter=100, use_decay=True):
+                             target_threshold=0.01, topo_gain=0.5, max_iter=1000, use_decay=True):
         """Exhaustive Point-Wise Convergence Engine."""
         t_start = time()
         print(f"--- INITIALIZING TIP CONVERGENCE ENGINE ---")
@@ -91,34 +91,40 @@ class Unified_STM_Simulator:
         return lv, coord, atomtypes, atomnums
 
     def parse_vasp_outputs(self, locpot_path):
-        poscar_path = './CONTCAR' if exists('./CONTCAR') and getsize('./CONTCAR') > 0 else './POSCAR'
-        self.lv, self.coord, self.atomtypes, self.atomnums = self._parse_poscar(poscar_path)
-        dos_parser = SpinAwareDosParser(join(self.filepath, 'DOSCAR'))
-        self.energies, self.ef = dos_parser.energies, dos_parser.ef
-        self.is_polarized = dos_parser.is_polarized
-        lpt_mgr = LocpotManager(self.filepath, ispin=2 if self.is_polarized else 1)
-        locpot_raw = cp.array(lpt_mgr.get_data(), dtype=cp.float32)
-        
-        if self.is_polarized:
-            v_total, v_diff = locpot_raw[0], locpot_raw[1]
-            self.locpot_gpu = cp.stack([v_total + 0.5 * v_diff, v_total - 0.5 * v_diff])
-        else:
-            self.locpot_gpu = locpot_raw
+            poscar_path = './CONTCAR' if exists('./CONTCAR') and getsize('./CONTCAR') > 0 else './POSCAR'
+            self.lv, self.coord, self.atomtypes, self.atomnums = self._parse_poscar(poscar_path)
+            dos_parser = SpinAwareDosParser(join(self.filepath, 'DOSCAR'))
+            self.energies, self.ef = dos_parser.energies, dos_parser.ef
+            self.is_polarized = dos_parser.is_polarized
+            lpt_mgr = LocpotManager(self.filepath, ispin=2 if self.is_polarized else 1)
+            locpot_raw = cp.array(lpt_mgr.get_data(), dtype=cp.float32)
             
-        self.inv_lv_gpu = cp.array(inv(self.lv), dtype=cp.float32)
-        self.locpot_dims_gpu = cp.array(self.locpot_gpu.shape[-3:], dtype=cp.float32)
-        self.num_total_atoms = sum(self.atomnums)
-        self.dos_up_gpu = cp.array(dos_parser.get_dos_for_simulator(spin='up'), dtype=cp.float32)
-        self.dos_dn_gpu = cp.array(dos_parser.get_dos_for_simulator(spin='down'), dtype=cp.float32) if self.is_polarized else None
-        self.z_highest_atom = np.max(self.coord[:, 2])
-        coords, idx_list = [], []; base_idx = np.arange(len(self.coord))
-        for i in range(-self.unit_cell_num, self.unit_cell_num + 1):
-            for j in range(-self.unit_cell_num, self.unit_cell_num + 1):
-                coords.append(self.coord + self.lv[0] * i + self.lv[1] * j); idx_list.append(base_idx)
-        self.periodic_coord_gpu = cp.array(np.concatenate(coords), dtype=cp.float32)
-        self.atom_indices_periodic_gpu = cp.array(np.concatenate(idx_list))
-        self.map_mat_gpu = cp.zeros((self.num_total_atoms, len(self.atom_indices_periodic_gpu)), dtype=cp.float32)
-        self.map_mat_gpu[self.atom_indices_periodic_gpu, cp.arange(len(self.atom_indices_periodic_gpu))] = 1.0
+            if self.is_polarized:
+                v_total, v_diff = locpot_raw[0], locpot_raw[1]
+                self.locpot_gpu = cp.stack([v_total + 0.5 * v_diff, v_total - 0.5 * v_diff])
+            else:
+                self.locpot_gpu = locpot_raw
+                
+            self.inv_lv_gpu = cp.array(inv(self.lv), dtype=cp.float32)
+            self.locpot_dims_gpu = cp.array(self.locpot_gpu.shape[-3:], dtype=cp.float32)
+            self.num_total_atoms = sum(self.atomnums)
+            self.dos_up_gpu = cp.array(dos_parser.get_dos_for_simulator(spin='up'), dtype=cp.float32)
+            self.dos_dn_gpu = cp.array(dos_parser.get_dos_for_simulator(spin='down'), dtype=cp.float32) if self.is_polarized else None
+            
+            # Filter: Only consider atoms where fractional z < 0.9
+            inv_lv = inv(self.lv)
+            frac_coords = np.dot(self.coord, inv_lv)
+            z_filter_mask = frac_coords[:, 2] < 0.9
+            self.z_highest_atom = np.max(self.coord[z_filter_mask, 2])
+            
+            coords, idx_list = [], []; base_idx = np.arange(len(self.coord))
+            for i in range(-self.unit_cell_num, self.unit_cell_num + 1):
+                for j in range(-self.unit_cell_num, self.unit_cell_num + 1):
+                    coords.append(self.coord + self.lv[0] * i + self.lv[1] * j); idx_list.append(base_idx)
+            self.periodic_coord_gpu = cp.array(np.concatenate(coords), dtype=cp.float32)
+            self.atom_indices_periodic_gpu = cp.array(np.concatenate(idx_list))
+            self.map_mat_gpu = cp.zeros((self.num_total_atoms, len(self.atom_indices_periodic_gpu)), dtype=cp.float32)
+            self.map_mat_gpu[self.atom_indices_periodic_gpu, cp.arange(len(self.atom_indices_periodic_gpu))] = 1.0
 
     def _calculate_ldos_at_points_gpu(self, tip_positions, emin, emax, use_energy_decay=False):
         estart, eend = np.searchsorted(self.energies, emin), np.searchsorted(self.energies, emax, side='right')
@@ -155,6 +161,7 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
         self.p1, self.p2 = np.array(path_coords[:2]), np.array(path_coords[2:])
         self.erange, self.ldos_height, self.cmap_topo = list(erange), ldos_height, cmap_topo
         self.npts = 72; self.is_running, self.normalize, self.show_mag = False, False, False
+        self.show_atoms = True
         self.use_decay_topo, self.use_decay_ldos = True, True; self.display_cells = 1
         
         self.cached_p1, self.cached_p2 = None, None
@@ -190,7 +197,7 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
         self.line_art, = self.ax_map.plot([], [], 'r--', lw=2.5, zorder=5); self.m_colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
         self.ends = self.ax_map.scatter([], [], c='white', edgecolors='red', s=100, zorder=10, picker=5); self.marks = self.ax_map.scatter([], [], s=150, edgecolors='black', zorder=15, picker=5)
         self.btn_run = Button(plt.axes([0.02, 0.02, 0.08, 0.06]), 'RUN', color='lightgray', hovercolor='lime')
-        self.chk = CheckButtons(plt.axes([0.11, 0.02, 0.12, 0.06]), ['T-Decay', 'L-Decay', 'Norm', 'Mag'], [self.use_decay_topo, self.use_decay_ldos, self.normalize, self.show_mag])
+        self.chk = CheckButtons(plt.axes([0.11, 0.02, 0.12, 0.06]), ['Atoms', 'Decay', 'Norm', 'Mag'], [self.show_atoms, self.use_decay_ldos, self.normalize, self.show_mag])
         self.s_cell = Slider(plt.axes([0.25, 0.02, 0.15, 0.03]), 'Cells', 0, 4, valinit=self.display_cells, valstep=1)
         self.s_emin = Slider(plt.axes([0.45, 0.05, 0.25, 0.02]), 'E Min', -5.0, 5.0, valinit=self.erange[0]); self.s_emax = Slider(plt.axes([0.45, 0.02, 0.25, 0.02]), 'E Max', -5.0, 5.0, valinit=self.erange[1])
         
@@ -211,9 +218,10 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
                 for j in range(-n, n + 1):
                     off = i * self.lv[0, :2] + j * self.lv[1, :2]
                     self.ax_map.tricontourf(self.grid_xy[:, 0] + off[0], self.grid_xy[:, 1] + off[1], self.current_z_map, levels=60, cmap=self.cmap_topo, zorder=1)
-                    tr = np.repeat(self.atomtypes, self.atomnums)
-                    for t_idx, t_name in enumerate(self.atomtypes):
-                        m = (tr == t_name); self.ax_map.scatter(self.coord[m, 0] + off[0], self.coord[m, 1] + off[1], s=10, color=plt.cm.tab10(t_idx/10), alpha=0.3, zorder=2)
+                    if self.show_atoms:
+                        tr = np.repeat(self.atomtypes, self.atomnums)
+                        for t_idx, t_name in enumerate(self.atomtypes):
+                            m = (tr == t_name); self.ax_map.scatter(self.coord[m, 0] + off[0], self.coord[m, 1] + off[1], s=10, color=plt.cm.tab10(t_idx/10), alpha=0.3, zorder=2)
             self.ax_map.set_aspect('equal'); self.ax_map.add_line(self.line_art); self.ax_map.add_collection(self.ends); self.ax_map.add_collection(self.marks)
             self.ax_map.set_title("Topo"); self.ax_map.set_xlabel("Distance (Å)"); self.ax_map.set_ylabel("Distance (Å)")
 
@@ -289,12 +297,13 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
             if p_len > 1e-9: self.marker_ratios[idx] = np.clip(event.xdata / p_len, 0, 1)
         self._update_all()
     def _on_ui_change(self, val):
-        self.use_decay_topo, self.use_decay_ldos, self.normalize, self.show_mag = self.chk.get_status()
-        self._update_all(full_refresh=(int(self.s_cell.val) != self.display_cells))
+        self.show_atoms, self.use_decay_ldos, self.normalize, self.show_mag = self.chk.get_status()
+        self._update_all(full_refresh=True)
         self.display_cells = int(self.s_cell.val)
     def _on_rel(self, event): self.active_obj = None
 
 if __name__ == "__main__":
-    v_dir = r'C:/dir/'
-    sim = Interactive_STM_Simulator(v_dir, [15, -4, 3, 20], [-2.525, -1.3], [17, 24.5], 1.3, LinearSegmentedColormap.from_list("t", ["black", "firebrick", "yellow"]))
-    sim.run_interactive(grid_res=64, topo_bias=0.2, topo_height=2.5, ldos_bias_sign='neg')
+    v_dir = r'C:/dir'
+    sim = Interactive_STM_Simulator(v_dir, [15, -4, 3, 20], [-2.1, 1.25], [17, 24.5], 1.2, LinearSegmentedColormap.from_list("t", ["black", "firebrick", "yellow"]))
+    # Topo decay behavior is set here via use_decay_topo=True
+    sim.run_interactive(grid_res=64, topo_bias=1.5, topo_height=2.5, ldos_bias_sign='pos', use_decay_topo=True)
