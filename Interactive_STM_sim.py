@@ -161,7 +161,7 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
         self.p1, self.p2 = np.array(path_coords[:2]), np.array(path_coords[2:])
         self.erange, self.ldos_height, self.cmap_topo = list(erange), ldos_height, cmap_topo
         self.npts = 72; self.is_running, self.normalize, self.show_mag = False, False, False
-        self.show_atoms = True
+        self.show_atoms, self.show_unit_cell = True, False
         self.use_decay_topo, self.use_decay_ldos = True, True; self.display_cells = 1
         
         self.cached_p1, self.cached_p2 = None, None
@@ -197,7 +197,7 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
         self.line_art, = self.ax_map.plot([], [], 'r--', lw=2.5, zorder=5); self.m_colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
         self.ends = self.ax_map.scatter([], [], c='white', edgecolors='red', s=100, zorder=10, picker=5); self.marks = self.ax_map.scatter([], [], s=150, edgecolors='black', zorder=15, picker=5)
         self.btn_run = Button(plt.axes([0.02, 0.02, 0.08, 0.06]), 'RUN', color='lightgray', hovercolor='lime')
-        self.chk = CheckButtons(plt.axes([0.11, 0.02, 0.12, 0.06]), ['Atoms', 'Decay', 'Norm', 'Mag'], [self.show_atoms, self.use_decay_ldos, self.normalize, self.show_mag])
+        self.chk = CheckButtons(plt.axes([0.11, 0.02, 0.12, 0.06]), ['Atoms', 'Decay', 'Norm', 'Mag', 'Cell'], [self.show_atoms, self.use_decay_ldos, self.normalize, self.show_mag, self.show_unit_cell])
         self.s_cell = Slider(plt.axes([0.25, 0.02, 0.15, 0.03]), 'Cells', 0, 4, valinit=self.display_cells, valstep=1)
         self.s_emin = Slider(plt.axes([0.45, 0.05, 0.25, 0.02]), 'E Min', -5.0, 5.0, valinit=self.erange[0]); self.s_emax = Slider(plt.axes([0.45, 0.02, 0.25, 0.02]), 'E Max', -5.0, 5.0, valinit=self.erange[1])
         
@@ -222,6 +222,12 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
                         tr = np.repeat(self.atomtypes, self.atomnums)
                         for t_idx, t_name in enumerate(self.atomtypes):
                             m = (tr == t_name); self.ax_map.scatter(self.coord[m, 0] + off[0], self.coord[m, 1] + off[1], s=10, color=plt.cm.tab10(t_idx/10), alpha=0.3, zorder=2)
+            
+            if self.show_unit_cell:
+                v0, v1, v2, v3 = np.array([0,0]), self.lv[0, :2], self.lv[0, :2] + self.lv[1, :2], self.lv[1, :2]
+                cell_pts = np.array([v0, v1, v2, v3, v0])
+                self.ax_map.plot(cell_pts[:, 0], cell_pts[:, 1], color='cyan', lw=2.0, ls='-', zorder=4, label='Unit Cell')
+
             self.ax_map.set_aspect('equal'); self.ax_map.add_line(self.line_art); self.ax_map.add_collection(self.ends); self.ax_map.add_collection(self.marks)
             self.ax_map.set_title("Topo"); self.ax_map.set_xlabel("Distance (Å)"); self.ax_map.set_ylabel("Distance (Å)")
 
@@ -297,13 +303,13 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
             if p_len > 1e-9: self.marker_ratios[idx] = np.clip(event.xdata / p_len, 0, 1)
         self._update_all()
     def _on_ui_change(self, val):
-        self.show_atoms, self.use_decay_ldos, self.normalize, self.show_mag = self.chk.get_status()
+        self.show_atoms, self.use_decay_ldos, self.normalize, self.show_mag, self.show_unit_cell = self.chk.get_status()
         self._update_all(full_refresh=True)
         self.display_cells = int(self.s_cell.val)
     def _on_rel(self, event): self.active_obj = None
 
 if __name__ == "__main__":
-    v_dir = r'C:/dir'
-    sim = Interactive_STM_Simulator(v_dir, [15, -4, 3, 20], [-2.1, 1.25], [17, 24.5], 1.2, LinearSegmentedColormap.from_list("t", ["black", "firebrick", "yellow"]))
+    v_dir =  r'C:/dir'
+    sim = Interactive_STM_Simulator(v_dir, [15, -4, 3, 20], [0.5, 2.75], [17, 24.5], 5.0, LinearSegmentedColormap.from_list("t", ["black", "firebrick", "yellow"]))
     # Topo decay behavior is set here via use_decay_topo=True
-    sim.run_interactive(grid_res=64, topo_bias=1.5, topo_height=2.5, ldos_bias_sign='pos', use_decay_topo=True)
+    sim.run_interactive(grid_res=64, topo_bias=1.5, topo_height=5.0, ldos_bias_sign='pos', use_decay_topo=True)
