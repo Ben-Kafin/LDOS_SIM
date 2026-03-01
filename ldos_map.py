@@ -357,6 +357,7 @@ class MapMode_STM_Simulator(Unified_STM_Simulator):
     def _on_rel(self, event): self.active_obj = None
 
 if __name__ == "__main__":
-    v_dir = r'C:/Users/Benjamin Kafin/Documents/VASP/SAM/zigzag/kpoints551/'
+    v_dir = r'C:/dir'
     sim = MapMode_STM_Simulator(v_dir, [-2.0, -0.8], 5, 1.5, LinearSegmentedColormap.from_list("t", ["black", "firebrick", "yellow"]))
+
     sim.run_map_mode(grid_res=48, ldos_bias_sign='pos')
