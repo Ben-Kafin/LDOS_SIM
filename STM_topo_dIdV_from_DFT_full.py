@@ -613,7 +613,8 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
     def _on_rel(self, event): self.active_obj = None
 
 if __name__ == "__main__":
-    v_dir = r'D:/Docs/VASP_CsSnI3/TM'
+    v_dir = r'D:/dir'
     # Initialized without hardcoded path or marker indices
     sim = Interactive_STM_Simulator(v_dir, [-2.525, -1.3], 5, LinearSegmentedColormap.from_list("t", ["black", "firebrick", "yellow"]))
+
     sim.run_interactive(grid_res=64, topo_bias=1.5, topo_height=5, ldos_bias_sign='neg', use_decay_topo=True)
