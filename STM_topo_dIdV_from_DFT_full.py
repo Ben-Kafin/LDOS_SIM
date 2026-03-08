@@ -157,8 +157,16 @@ class Unified_STM_Simulator:
         energy_indices = cp.arange(estart, eend); calc_energies_gpu = cp.array(self.energies[estart:eend], dtype=cp.float32)
         num_pts, num_e = tip_positions.shape[0], len(calc_energies_gpu)
         tip_pos_gpu = cp.array(tip_positions, dtype=cp.float32); frac_coords = cp.dot(tip_pos_gpu, self.inv_lv_gpu)
+        
+        wrapped_frac_coords = cp.empty_like(frac_coords)
+        wrapped_frac_coords[:, :2] = frac_coords[:, :2] % 1.0
+        wrapped_frac_coords[:, 2] = frac_coords[:, 2]
+        
+        lv_gpu = cp.array(self.lv, dtype=cp.float32)
+        wrapped_tip_pos_gpu = cp.dot(wrapped_frac_coords, lv_gpu)
+        
         grid_indices = (frac_coords % 1.0).T * self.locpot_dims_gpu[:, None]
-        dists = cp.sqrt(cp.sum((self.periodic_coord_gpu[:, None, :] - tip_pos_gpu[None, :, :])**2, axis=2))
+        dists = cp.sqrt(cp.sum((self.periodic_coord_gpu[:, None, :] - wrapped_tip_pos_gpu[None, :, :])**2, axis=2))
 
         def _compute_channel(pot, dos_gpu, dos_collapsed):
             phi_local = cp_ndimage.map_coordinates(pot, grid_indices, order=1, mode='wrap') - self.ef
@@ -216,13 +224,15 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
 
         self.cached_p1, self.cached_p2 = None, None
         self.cached_emin, self.cached_emax = None, None
-        self.cached_d_topo, self.cached_d_ldos = None, None
-        self.cached_bias_energy, self.cached_nepts = None, None
+        self.cached_d_topo_line, self.cached_d_topo_map, self.cached_d_ldos = None, None, None
+        self.cached_bias_energy_line, self.cached_bias_energy_map, self.cached_nepts = None, None, None
         self.cached_ld_up, self.cached_ld_dn, self.cached_eg = None, None, None
         self.cached_marker_coords, self.cached_spec_ldos = None, None
 
     def run_interactive(self, grid_res=64, topo_bias=0.2, topo_height=2.5, ldos_bias_sign='neg', use_decay_topo=True, use_decay_ldos=True):
         self.ldos_bias_sign, self.use_decay_topo, self.use_decay_ldos = ldos_bias_sign, use_decay_topo, use_decay_ldos
+        self.global_topo_bias = topo_bias
+        self.topo_height = topo_height
         print("\n--- Phase 1: Global Topography Pre-Calculation ---")
         grid_xy = (np.meshgrid(np.linspace(0,1,grid_res), np.linspace(0,1,grid_res))[0].ravel()[:, None] * self.lv[0, :2]) + (np.meshgrid(np.linspace(0,1,grid_res), np.linspace(0,1,grid_res))[1].ravel()[:, None] * self.lv[1, :2])
         grid_xy_gpu = cp.array(grid_xy, dtype=cp.float32); z_fixed = cp.full(grid_xy_gpu.shape[0], self.z_highest_atom + topo_height, dtype=cp.float32)
@@ -232,6 +242,7 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
         print(f"[*] Global Setpoint LDOS: {float(target_setp):.6e}")
         z_map_gpu = self._converge_tip_height(z_fixed, grid_xy_gpu, t_emin, t_emax, target_setp, use_decay=self.use_decay_topo)
         self.current_z_map, self.grid_xy = cp.asnumpy(z_map_gpu), grid_xy
+        self.global_z_map = self.current_z_map.copy()
         self.grid_xy_gpu = grid_xy_gpu
         self.fig = plt.figure(figsize=(20, 14))
         self._build_ui()
@@ -268,8 +279,8 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
             self.s_num_marks.on_changed(self._on_ui_change)
 
         elif self.mode == 'Map':
-            self.gs = gridspec.GridSpec(2, 2, height_ratios=[2.5, 1], width_ratios=[3, 1], hspace=0.35, wspace=0.2)
-            self.ax_map, self.ax_spec = self.fig.add_subplot(self.gs[0, 0]), self.fig.add_subplot(self.gs[0, 1])
+            self.gs = gridspec.GridSpec(2, 3, height_ratios=[2.5, 1], width_ratios=[1, 1, 1.2], hspace=0.35, wspace=0.25)
+            self.ax_map_global, self.ax_map, self.ax_spec = self.fig.add_subplot(self.gs[0, 0]), self.fig.add_subplot(self.gs[0, 1]), self.fig.add_subplot(self.gs[0, 2])
             self.map_axes = []
             self.marks = self.ax_map.scatter([], [], s=150, edgecolors='black', zorder=15, picker=5)
             self.s_num_marks = Slider(plt.axes([0.35, 0.02, 0.1, 0.03]), 'Points', 1, 10, valinit=len(self.marker_coords), valstep=1)
@@ -298,19 +309,34 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
     def _update_all(self, full_refresh=False):
         if full_refresh:
             self.ax_map.clear(); n = int(self.s_cell.val)
+            if self.mode == 'Map': self.ax_map_global.clear()
+            t_ax = self.ax_map_global if self.mode == 'Map' else self.ax_map
+            z_data = self.global_z_map if self.mode == 'Map' else self.current_z_map
+            
             for i in range(-n, n + 1):
                 for j in range(-n, n + 1):
                     off = i * self.lv[0, :2] + j * self.lv[1, :2]
-                    self.ax_map.tricontourf(self.grid_xy[:, 0] + off[0], self.grid_xy[:, 1] + off[1], self.current_z_map, levels=60, cmap=self.cmap_topo, zorder=1)
+                    t_ax.tricontourf(self.grid_xy[:, 0] + off[0], self.grid_xy[:, 1] + off[1], z_data, levels=60, cmap=self.cmap_topo, zorder=1)
+                    if self.mode == 'Map':
+                        self.ax_map.tricontourf(self.grid_xy[:, 0] + off[0], self.grid_xy[:, 1] + off[1], self.current_z_map, levels=60, cmap=self.cmap_topo, zorder=1)
                     if self.show_atoms:
                         tr = np.repeat(self.atomtypes, self.atomnums)
                         for t_idx, t_name in enumerate(self.atomtypes):
-                            m = (tr == t_name); self.ax_map.scatter(self.coord[m, 0] + off[0], self.coord[m, 1] + off[1], s=10, color=plt.cm.tab10(t_idx/10), alpha=0.3, zorder=2)
+                            m = (tr == t_name)
+                            t_ax.scatter(self.coord[m, 0] + off[0], self.coord[m, 1] + off[1], s=10, color=plt.cm.tab10(t_idx/10), alpha=0.3, zorder=2)
+                            if self.mode == 'Map':
+                                self.ax_map.scatter(self.coord[m, 0] + off[0], self.coord[m, 1] + off[1], s=10, color=plt.cm.tab10(t_idx/10), alpha=0.3, zorder=2)
             if self.show_unit_cell:
                 v0, v1, v2, v3 = np.array([0,0]), self.lv[0, :2], self.lv[0, :2] + self.lv[1, :2], self.lv[1, :2]
                 cell_pts = np.array([v0, v1, v2, v3, v0])
-                self.ax_map.plot(cell_pts[:, 0], cell_pts[:, 1], color='cyan', lw=2.0, ls='-', zorder=4, label='Unit Cell')
-            self.ax_map.set_aspect('equal')
+                t_ax.plot(cell_pts[:, 0], cell_pts[:, 1], color='cyan', lw=2.0, ls='-', zorder=4, label='Unit Cell')
+                if self.mode == 'Map': self.ax_map.plot(cell_pts[:, 0], cell_pts[:, 1], color='cyan', lw=2.0, ls='-', zorder=4, label='Unit Cell')
+            
+            t_ax.set_aspect('equal')
+            t_ax.set_title(f"Global Topo | Bias: {self.global_topo_bias} V | Height: {self.topo_height} Å")
+            if self.mode == 'Map':
+                self.ax_map.set_aspect('equal')
+                self.ax_map.set_title(f"Map Topo | Bias: {self.s_emin.val if str(self.ldos_bias_sign).lower() in ['neg', '-', 'negative'] else self.s_emax.val} V | Height: {self.ldos_height} Å")
             if self.mode == 'Line':
                 self.ax_map.add_line(self.line_art); self.ax_map.add_collection(self.ends)
             self.ax_map.add_collection(self.marks)
@@ -326,18 +352,47 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
 
         bias_e = self.s_emin.val if str(self.ldos_bias_sign).lower() in ['neg', '-', 'negative'] else self.s_emax.val
         nepts = int(self.s_nepts.val) if hasattr(self, 's_nepts') else None
-        needs_topo = (self.mode == 'Line' and (self.cached_p1 is None or not np.array_equal(self.p1, self.cached_p1) or not np.array_equal(self.p2, self.cached_p2) or self.cached_bias_energy != bias_e or self.cached_d_topo != self.use_decay_topo))
+        needs_topo = ((self.mode == 'Line' and (self.cached_p1 is None or not np.array_equal(self.p1, self.cached_p1) or not np.array_equal(self.p2, self.cached_p2) or self.cached_bias_energy_line != bias_e or self.cached_d_topo_line != self.use_decay_topo)) or 
+                      (self.mode == 'Map' and (self.cached_bias_energy_map != bias_e or self.cached_d_topo_map != self.use_decay_topo)))
         needs_ldos = (needs_topo or self.cached_emin != self.s_emin.val or self.cached_emax != self.s_emax.val or self.cached_d_ldos != self.use_decay_ldos or (self.mode == 'Map' and self.cached_nepts != nepts))
         needs_spec = (needs_ldos or (self.mode in ['Single Point', 'Map'] and (self.cached_marker_coords is None or not np.array_equal(self.marker_coords, self.cached_marker_coords))))
 
-        if needs_topo and self.mode == 'Line':
-            l_emin, l_emax = sorted([0.0, bias_e]); p_xy_gpu = cp.array(p_xy, dtype=cp.float32)
-            ld_up, ld_dn, l_engs = self._calculate_ldos_at_points_gpu(cp.hstack([p_xy_gpu, cp.full((self.npts,1), self.z_highest_atom + self.ldos_height, dtype=cp.float32)]), l_emin, l_emax, use_energy_decay=self.use_decay_topo, preserve_orbitals=False)
-            target = cp.max(gpu_simpson(ld_up + ld_dn if ld_dn is not None else ld_up, l_engs))
-            print(f"[*] Path Setpoint LDOS: {float(target):.6e}")
-            z_line = self._converge_tip_height(cp.full(self.npts, self.z_highest_atom + self.ldos_height, dtype=cp.float32), p_xy_gpu, l_emin, l_emax, target, use_decay=self.use_decay_topo)
-            self.current_z_line = cp.asnumpy(z_line)
-            self.cached_p1, self.cached_p2, self.cached_bias_energy, self.cached_d_topo = self.p1.copy(), self.p2.copy(), bias_e, self.use_decay_topo
+        if needs_topo:
+            if self.mode == 'Line':
+                l_emin, l_emax = sorted([0.0, bias_e]); p_xy_gpu = cp.array(p_xy, dtype=cp.float32)
+                ld_up, ld_dn, l_engs = self._calculate_ldos_at_points_gpu(cp.hstack([p_xy_gpu, cp.full((self.npts,1), self.z_highest_atom + self.ldos_height, dtype=cp.float32)]), l_emin, l_emax, use_energy_decay=self.use_decay_topo, preserve_orbitals=False)
+                target = cp.max(gpu_simpson(ld_up + ld_dn if ld_dn is not None else ld_up, l_engs))
+                print(f"[*] Path Setpoint LDOS: {float(target):.6e}")
+                z_line = self._converge_tip_height(cp.full(self.npts, self.z_highest_atom + self.ldos_height, dtype=cp.float32), p_xy_gpu, l_emin, l_emax, target, use_decay=self.use_decay_topo)
+                self.current_z_line = cp.asnumpy(z_line)
+                self.cached_p1, self.cached_p2, self.cached_bias_energy_line, self.cached_d_topo_line = self.p1.copy(), self.p2.copy(), bias_e, self.use_decay_topo
+            elif self.mode == 'Map':
+                t_emin, t_emax = sorted([0.0, bias_e])
+                z_fixed = cp.full(self.grid_xy_gpu.shape[0], self.z_highest_atom + self.ldos_height, dtype=cp.float32)
+                ld_up, ld_dn, init_engs = self._calculate_ldos_at_points_gpu(cp.hstack([self.grid_xy_gpu, z_fixed[:, None]]), t_emin, t_emax, use_energy_decay=self.use_decay_topo, preserve_orbitals=False)
+                target_setp = cp.max(gpu_simpson(ld_up + ld_dn if ld_dn is not None else ld_up, init_engs))
+                print(f"[*] Map Local Setpoint LDOS: {float(target_setp):.6e}")
+                z_map_gpu = self._converge_tip_height(z_fixed, self.grid_xy_gpu, t_emin, t_emax, target_setp, use_decay=self.use_decay_topo)
+                self.current_z_map = cp.asnumpy(z_map_gpu)
+                self.cached_bias_energy_map, self.cached_d_topo_map = bias_e, self.use_decay_topo
+                
+                self.ax_map.clear(); n = int(self.s_cell.val)
+                for i in range(-n, n + 1):
+                    for j in range(-n, n + 1):
+                        off = i * self.lv[0, :2] + j * self.lv[1, :2]
+                        self.ax_map.tricontourf(self.grid_xy[:, 0] + off[0], self.grid_xy[:, 1] + off[1], self.current_z_map, levels=60, cmap=self.cmap_topo, zorder=1)
+                        if self.show_atoms:
+                            tr = np.repeat(self.atomtypes, self.atomnums)
+                            for t_idx, t_name in enumerate(self.atomtypes):
+                                m = (tr == t_name)
+                                self.ax_map.scatter(self.coord[m, 0] + off[0], self.coord[m, 1] + off[1], s=10, color=plt.cm.tab10(t_idx/10), alpha=0.3, zorder=2)
+                if self.show_unit_cell:
+                    v0, v1, v2, v3 = np.array([0,0]), self.lv[0, :2], self.lv[0, :2] + self.lv[1, :2], self.lv[1, :2]
+                    cell_pts = np.array([v0, v1, v2, v3, v0])
+                    self.ax_map.plot(cell_pts[:, 0], cell_pts[:, 1], color='cyan', lw=2.0, ls='-', zorder=4, label='Unit Cell')
+                self.ax_map.set_aspect('equal')
+                self.ax_map.set_title(f"Map Topo | Bias: {bias_e} V | Height: {self.ldos_height} Å")
+                self.ax_map.add_collection(self.marks)
 
         if needs_ldos:
             if self.mode == 'Line':
@@ -356,8 +411,13 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
         if needs_spec and self.mode in ['Single Point', 'Map']:
             m_coords = np.array(self.marker_coords)
             z_marks = []
+            inv_lv_np = inv(self.lv)
             for pt in m_coords:
-                dist_sq = (self.grid_xy[:, 0] - pt[0])**2 + (self.grid_xy[:, 1] - pt[1])**2
+                pt_3d = np.array([pt[0], pt[1], 0.0])
+                f_pt = np.dot(pt_3d, inv_lv_np)
+                f_pt[:2] = f_pt[:2] % 1.0
+                wrapped_pt = np.dot(f_pt, self.lv)
+                dist_sq = (self.grid_xy[:, 0] - wrapped_pt[0])**2 + (self.grid_xy[:, 1] - wrapped_pt[1])**2
                 z_marks.append(self.current_z_map[np.argmin(dist_sq)])
             z_marks = np.array(z_marks)
             
@@ -503,6 +563,8 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
                 v_max = np.max(np.abs(f_ldos_total)); mesh = self.ax_ldos.pcolormesh(self.cached_eg, p_dist, f_ldos_total, cmap='bwr', shading='auto', vmin=-v_max, vmax=v_max)
             else:
                 mesh = self.ax_ldos.pcolormesh(self.cached_eg, p_dist, f_ldos_total, cmap='jet', shading='auto')
+            self.ax_ldos.set_title("LDOS")
+            self.ax_ldos.set_yticks([])
             self.fig.colorbar(mesh, cax=self.cax)
             self.ax_prof.plot(p_dist, self.current_z_line, 'k-', lw=1.5); self.ax_prof.set(ylabel="Height (Å)", title="Tip Height", xlabel="Dist (Å)")
             
@@ -667,7 +729,7 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
     def _on_rel(self, event): self.active_obj = None
 
 if __name__ == "__main__":
-    v_dir = r'C:/dir'
+    v_dir = r'dir'
     # Initialized without hardcoded path or marker indices
-    sim = Interactive_STM_Simulator(v_dir, [-2.525, -1.3], 1.5, LinearSegmentedColormap.from_list("t", ["black", "firebrick", "yellow"]))
+    sim = Interactive_STM_Simulator(v_dir, [-2.525, -1.3], 1.3, LinearSegmentedColormap.from_list("t", ["black", "firebrick", "yellow"]))
     sim.run_interactive(grid_res=64, topo_bias=0.2, topo_height=2.5, ldos_bias_sign='neg', use_decay_topo=True)
