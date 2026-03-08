@@ -485,6 +485,12 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
         p_dist_val = p_dist[active_idx] if self.mode == 'Line' else f"[{self.marker_coords[active_idx][0]:.1f}, {self.marker_coords[active_idx][1]:.1f}]"
         self.ax_spec.set(title=f"Partitioned LDOS (Marker {self.active_marker_idx}: {p_dist_val} Å)", xlabel="Energy (eV)")
 
+        if self.mode == 'Map':
+            if not hasattr(self, 'map_e_targets') or len(self.map_e_targets) != nepts or full_refresh:
+                self.map_e_targets = np.linspace(self.s_emin.val, self.s_emax.val, nepts)
+            for i, e_val in enumerate(self.map_e_targets):
+                self.ax_spec.axvline(x=e_val, color='black', linestyle='-', lw=2, picker=5, label=f'emarker_{i}')
+
         if self.mode == 'Line':
             self.ax_ldos.clear(); self.ax_prof.clear(); self.ax_stripe.clear(); self.cax.clear()
             f_ldos_total = np.sum(f_ldos_raw, axis=(2, 3))
@@ -516,20 +522,24 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
                 sub_gs = gridspec.GridSpecFromSubplotSpec(1, nepts, subplot_spec=self.gs[1, :], wspace=0.1)
                 for i in range(nepts): self.map_axes.append(self.fig.add_subplot(sub_gs[0, i]))
 
-            e_targets = np.linspace(self.s_emin.val, self.s_emax.val, nepts)
+            if not hasattr(self, 'map_e_targets') or len(self.map_e_targets) != nepts or full_refresh:
+                self.map_e_targets = np.linspace(self.s_emin.val, self.s_emax.val, nepts)
             v_max = np.max(np.abs(f_ldos_total)) if self.show_mag else None
             m_coords_np = np.array(self.marker_coords)
 
-            for i, target_e in enumerate(e_targets):
+            for i, target_e in enumerate(self.map_e_targets):
                 ax = self.map_axes[i]
                 ax.clear()
                 e_idx = np.abs(self.cached_eg - target_e).argmin()
                 slice_data = f_ldos_total[:, e_idx]
 
-                if self.show_mag and f_dn is not None:
-                    ax.tricontourf(self.grid_xy[:,0], self.grid_xy[:,1], slice_data, levels=40, cmap='bwr', vmin=-v_max, vmax=v_max)
-                else:
-                    ax.tricontourf(self.grid_xy[:,0], self.grid_xy[:,1], slice_data, levels=40, cmap='jet')
+                for nx in range(2):
+                    for ny in range(2):
+                        off = nx * self.lv[0, :2] + ny * self.lv[1, :2]
+                        if self.show_mag and f_dn is not None:
+                            ax.tricontourf(self.grid_xy[:,0] + off[0], self.grid_xy[:,1] + off[1], slice_data, levels=40, cmap='bwr', vmin=-v_max, vmax=v_max)
+                        else:
+                            ax.tricontourf(self.grid_xy[:,0] + off[0], self.grid_xy[:,1] + off[1], slice_data, levels=40, cmap='jet')
                 
                 ax.scatter(m_coords_np[:, 0], m_coords_np[:, 1], color=self.m_colors[:len(m_coords_np)], s=30, edgecolors='white', zorder=5)
                 ax.set_title(f"E = {self.cached_eg[e_idx]:.3f} eV", fontsize=10)
@@ -537,13 +547,45 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
 
         self.fig.canvas.draw_idle()
 
+    def _redraw_map_slice(self, i):
+        ax = self.map_axes[i]
+        ax.clear()
+        target_e = self.map_e_targets[i]
+        e_idx = np.abs(self.cached_eg - target_e).argmin()
+        
+        f_up, f_dn = self.cached_ld_up.copy(), (self.cached_ld_dn.copy() if self.cached_ld_dn is not None else None)
+        f_ldos_raw = (f_up - f_dn) if (self.show_mag and f_dn is not None) else (f_up + f_dn if f_dn is not None else f_up)
+        f_ldos_total = f_ldos_raw.copy()
+        if self.normalize: f_ldos_total /= (np.trapezoid(f_ldos_total, x=self.cached_eg, axis=1)[:, None] + 1e-15)
+        f_ldos_total = np.nan_to_num(f_ldos_total, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        slice_data = f_ldos_total[:, e_idx]
+        v_max = np.max(np.abs(f_ldos_total)) if self.show_mag else None
+        m_coords_np = np.array(self.marker_coords)
+
+        for nx in range(2):
+            for ny in range(2):
+                off = nx * self.lv[0, :2] + ny * self.lv[1, :2]
+                if self.show_mag and f_dn is not None:
+                    ax.tricontourf(self.grid_xy[:,0] + off[0], self.grid_xy[:,1] + off[1], slice_data, levels=40, cmap='bwr', vmin=-v_max, vmax=v_max)
+                else:
+                    ax.tricontourf(self.grid_xy[:,0] + off[0], self.grid_xy[:,1] + off[1], slice_data, levels=40, cmap='jet')
+        
+        ax.scatter(m_coords_np[:, 0], m_coords_np[:, 1], color=self.m_colors[:len(m_coords_np)], s=30, edgecolors='white', zorder=5)
+        ax.set_title(f"E = {self.cached_eg[e_idx]:.3f} eV", fontsize=10)
+        ax.set_aspect('equal'); ax.set_xticks([]); ax.set_yticks([])
+
     def _on_pick(self, event):
         if event.artist == getattr(self, 'ends', None) and self.mode == 'Line': self.active_obj = ('end', event.ind[0])
         elif event.artist == getattr(self, 'marks', None): self.active_obj = ('mark_map', event.ind[0])
         elif getattr(event, 'mouseevent', None) and event.mouseevent.inaxes == self.ax_spec:
             label = event.artist.get_label()
+            if label.startswith('emarker_'):
+                if self.plot_level == 0:
+                    self.active_obj = ('emarker', int(label.split('_')[1]))
+                return
             if self.plot_level == 0:
-                if 'marker_' in label: self.active_marker_idx = int(label.split('_')[1])
+                if label.startswith('marker_'): self.active_marker_idx = int(label.split('_')[1])
                 self.plot_level = 1
             elif self.plot_level == 1: self.plot_level = 2
             elif self.plot_level == 2:
@@ -554,7 +596,7 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
                 self.active_element = self._get_element_by_index_helper(self.active_atom)
                 self.plot_level = 4
             self._update_all()
-        elif isinstance(event.artist, plt.Line2D) and 'marker_' in event.artist.get_label():
+        elif isinstance(event.artist, plt.Line2D) and event.artist.get_label().startswith('marker_'):
             self.active_obj = ('mark_dynamic', int(event.artist.get_label().split('_')[1]))
             self.active_marker_idx = int(event.artist.get_label().split('_')[1])
             self._update_all()
@@ -593,6 +635,13 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
                 if p_len > 1e-9: self.marker_ratios[idx] = np.clip(event.xdata / p_len, 0, 1)
             elif hasattr(self, 'ax_ldos') and event.inaxes in [self.ax_ldos, self.ax_stripe]:
                 if p_len > 1e-9: self.marker_ratios[idx] = np.clip(event.ydata / p_len, 0, 1)
+        elif t_obj == 'emarker' and event.inaxes == self.ax_spec:
+            self.map_e_targets[idx] = np.clip(event.xdata, self.s_emin.val, self.s_emax.val)
+            for line in self.ax_spec.get_lines():
+                if line.get_label() == f'emarker_{idx}': line.set_xdata([self.map_e_targets[idx], self.map_e_targets[idx]])
+            self._redraw_map_slice(idx)
+            self.fig.canvas.draw_idle()
+            return
         self._update_all()
 
     def _on_ui_change(self, val):
@@ -620,5 +669,5 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
 if __name__ == "__main__":
     v_dir = r'C:/dir'
     # Initialized without hardcoded path or marker indices
-    sim = Interactive_STM_Simulator(v_dir, [3.0, 4.75], 3, LinearSegmentedColormap.from_list("t", ["black", "firebrick", "yellow"]))
-    sim.run_interactive(grid_res=64, topo_bias=1.5, topo_height=3, ldos_bias_sign='pos', use_decay_topo=True)
+    sim = Interactive_STM_Simulator(v_dir, [-2.525, -1.3], 1.5, LinearSegmentedColormap.from_list("t", ["black", "firebrick", "yellow"]))
+    sim.run_interactive(grid_res=64, topo_bias=0.2, topo_height=2.5, ldos_bias_sign='neg', use_decay_topo=True)
