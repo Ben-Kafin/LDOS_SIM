@@ -45,8 +45,8 @@ def gpu_chen_tunneling_factor(V, E, phi):
     V_eff = cp.where(cp.abs(V) < 1e-6, 1e-6, V)
     V_j, E_j, phi_j = cp.abs(V_eff) * q, E * q, phi * q
     prefactor = (8.0 / (3.0 * V_j)) * cp.pi * cp.sqrt(2.0 * me) / h
-    term1 = cp.power(phi_j - E_j + V_j, 1.5)
-    term2 = cp.power(phi_j - E_j, 1.5)
+    term1 = cp.power(cp.maximum(0.0, phi_j - E_j + V_j), 1.5)
+    term2 = cp.power(cp.maximum(0.0, phi_j - E_j), 1.5)
     return prefactor * (term1 - term2)
 
 class Unified_STM_Simulator:
@@ -369,9 +369,13 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
             self.cached_spec_ldos = spec_ldos
             self.cached_marker_coords = np.array(self.marker_coords).copy()
             
-        if self.mode == 'Line':
+        if self.mode in ['Line', 'Map'] and self.cached_ld_up is not None:
             f_up, f_dn = self.cached_ld_up.copy(), (self.cached_ld_dn.copy() if self.cached_ld_dn is not None else None)
             f_ldos_raw = (f_up - f_dn) if (self.show_mag and f_dn is not None) else (f_up + f_dn if f_dn is not None else f_up)
+        else:
+            f_ldos_raw = None
+
+        if self.mode == 'Line':
             active_idx = int(self.marker_ratios[min(self.active_marker_idx, len(self.marker_ratios)-1)] * (self.npts - 1))
             active_ldos = f_ldos_raw[active_idx]
         else:
@@ -505,6 +509,7 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
         elif self.mode == 'Map':
             f_ldos_total = f_ldos_raw.copy()
             if self.normalize: f_ldos_total /= (np.trapezoid(f_ldos_total, x=self.cached_eg, axis=1)[:, None] + 1e-15)
+            f_ldos_total = np.nan_to_num(f_ldos_total, nan=0.0, posinf=0.0, neginf=0.0)
             if len(self.map_axes) != nepts or full_refresh:
                 for ax in self.map_axes: ax.remove()
                 self.map_axes.clear()
@@ -613,8 +618,7 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
     def _on_rel(self, event): self.active_obj = None
 
 if __name__ == "__main__":
-    v_dir = r'D:/dir'
+    v_dir = r'C:/dir'
     # Initialized without hardcoded path or marker indices
-    sim = Interactive_STM_Simulator(v_dir, [-2.525, -1.3], 5, LinearSegmentedColormap.from_list("t", ["black", "firebrick", "yellow"]))
-
-    sim.run_interactive(grid_res=64, topo_bias=1.5, topo_height=5, ldos_bias_sign='neg', use_decay_topo=True)
+    sim = Interactive_STM_Simulator(v_dir, [3.0, 4.75], 3, LinearSegmentedColormap.from_list("t", ["black", "firebrick", "yellow"]))
+    sim.run_interactive(grid_res=64, topo_bias=1.5, topo_height=3, ldos_bias_sign='pos', use_decay_topo=True)
