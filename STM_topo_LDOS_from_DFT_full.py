@@ -25,7 +25,7 @@ from time import time
 # --- SURGICAL IMPORT INTEGRATION ---
 # Assuming these exist in your environment as per original source
 from DOSCAR_spin_orbitals import SpinAwareDosParser
-from LOCPOT import LocpotManager
+from LOCPOT_spin import LocpotManager
 
 # --- CORE UTILITIES ---
 def gpu_simpson(y, x):
@@ -865,3 +865,4 @@ if __name__ == "__main__":
     # Initialized without hardcoded path or marker indices
     sim = Interactive_STM_Simulator(v_dir, [-2.525, -1.3], 1.3, LinearSegmentedColormap.from_list("t", ["black", "firebrick", "yellow"]))
     sim.run_interactive(grid_res=64, topo_bias=0.2, topo_height=2.5, ldos_bias_sign='neg', use_decay_topo=True)
+
