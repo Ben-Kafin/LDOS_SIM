@@ -214,6 +214,7 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
         self.show_atoms, self.show_unit_cell = True, False
         self.use_decay_topo, self.use_decay_ldos = True, True; self.display_cells = 1
         self.mode = 'Single Point'
+        self.show_decomp, self.show_dcmp_norm = False, False
         
         self.m_colors = ['#1f77b4', '#2ca02c', '#9467bd', '#00ced1', '#e377c2', '#17becf', '#bcbd22', '#7f7f7f', '#8c564b', '#d62728']
         self.marker_ratios = [0.25, 0.75]
@@ -248,6 +249,38 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
         self._build_ui()
         plt.show()
 
+    def _get_partitions(self, f_ldos_raw):
+            partitions = []
+            if f_ldos_raw is not None:
+                if not self.show_decomp or self.plot_level == 0:
+                    partitions.append(("Total", np.sum(f_ldos_raw, axis=(2, 3))))
+                elif self.plot_level == 1:
+                    atom_types_exp = np.repeat(self.atomtypes, self.atomnums)
+                    au_idx = [i for i, t in enumerate(atom_types_exp) if t == 'Au']
+                    mol_idx = [i for i, t in enumerate(atom_types_exp) if t != 'Au']
+                    au_data = np.sum(f_ldos_raw[:, :, au_idx, :], axis=(2, 3)) if au_idx else np.zeros_like(f_ldos_raw[:, :, 0, 0])
+                    mol_data = np.sum(f_ldos_raw[:, :, mol_idx, :], axis=(2, 3)) if mol_idx else np.zeros_like(f_ldos_raw[:, :, 0, 0])
+                    partitions.extend([("Au", au_data), ("Molecule", mol_data)])
+                elif self.plot_level == 2:
+                    atom_types_exp = np.repeat(self.atomtypes, self.atomnums)
+                    for t in self.atomtypes:
+                        t_idx = [i for i, x in enumerate(atom_types_exp) if x == t]
+                        t_data = np.sum(f_ldos_raw[:, :, t_idx, :], axis=(2, 3)) if t_idx else np.zeros_like(f_ldos_raw[:, :, 0, 0])
+                        partitions.append((t, t_data))
+                elif self.plot_level >= 3:
+                    atom_types_exp = np.repeat(self.atomtypes, self.atomnums)
+                    if getattr(self, 'active_element', None) is not None:
+                        e_idx = [i for i, x in enumerate(atom_types_exp) if x == self.active_element]
+                        for col_idx, orb in enumerate(self.orbitals):
+                            if e_idx:
+                                D = cp.sum(self.dos_up_gpu[e_idx, :, col_idx], axis=0)
+                                dD = cp.gradient(D)
+                                d2D = cp.gradient(dD)
+                                if not (float(cp.max(cp.abs(D))) < 1e-5 and float(cp.max(cp.abs(dD))) < 1e-5 and float(cp.max(cp.abs(d2D))) < 1e-5):
+                                    orb_data = np.sum(f_ldos_raw[:, :, e_idx, col_idx], axis=2)
+                                    partitions.append((f"{self.active_element} {orb}", orb_data))
+            return partitions
+
     def _build_ui(self):
         self.fig.clf()
         ax_radio = plt.axes([0.02, 0.90, 0.1, 0.08], facecolor='lightgray')
@@ -255,7 +288,7 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
         self.ui_radio.on_clicked(self._on_mode_change)
 
         self.btn_run = Button(plt.axes([0.02, 0.02, 0.05, 0.06]), 'RUN', color='lightgray', hovercolor='lime')
-        self.chk = CheckButtons(plt.axes([0.08, 0.02, 0.12, 0.06]), ['Atoms', 'Decay', 'Norm', 'Mag', 'Cell'], [self.show_atoms, self.use_decay_ldos, self.normalize, self.show_mag, self.show_unit_cell])
+        self.chk = CheckButtons(plt.axes([0.08, 0.02, 0.12, 0.08]), ['Atoms', 'Decay', 'Norm', 'Mag', 'Cell', 'Decomp', 'Dcmp Norm'], [self.show_atoms, self.use_decay_ldos, self.normalize, self.show_mag, self.show_unit_cell, self.show_decomp, self.show_dcmp_norm])
         self.s_cell = Slider(plt.axes([0.22, 0.02, 0.1, 0.03]), 'Cells', 0, 4, valinit=self.display_cells, valstep=1)
         self.s_emin = Slider(plt.axes([0.50, 0.05, 0.20, 0.02]), 'E Min', -5.0, 5.0, valinit=self.erange[0])
         self.s_emax = Slider(plt.axes([0.50, 0.02, 0.20, 0.02]), 'E Max', -5.0, 5.0, valinit=self.erange[1])
@@ -398,7 +431,7 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
             if self.mode == 'Line':
                 ld_up, ld_dn, eg = self._calculate_ldos_at_points_gpu(np.hstack([p_xy, self.current_z_line[:, None]]), self.s_emin.val, self.s_emax.val, use_energy_decay=self.use_decay_ldos, preserve_orbitals=True)
             elif self.mode == 'Map':
-                ld_up, ld_dn, eg = self._calculate_ldos_at_points_gpu(cp.hstack([self.grid_xy_gpu, cp.array(self.current_z_map)[:, None]]), self.s_emin.val, self.s_emax.val, use_energy_decay=self.use_decay_ldos, preserve_orbitals=False)
+                ld_up, ld_dn, eg = self._calculate_ldos_at_points_gpu(cp.hstack([self.grid_xy_gpu, cp.array(self.current_z_map)[:, None]]), self.s_emin.val, self.s_emax.val, use_energy_decay=self.use_decay_ldos, preserve_orbitals=True)
             else:
                 eg = cp.array(self.energies[np.searchsorted(self.energies, self.s_emin.val):np.searchsorted(self.energies, self.s_emax.val, side='right')])
                 ld_up, ld_dn = None, None
@@ -432,12 +465,14 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
         if self.mode in ['Line', 'Map'] and self.cached_ld_up is not None:
             f_up, f_dn = self.cached_ld_up.copy(), (self.cached_ld_dn.copy() if self.cached_ld_dn is not None else None)
             f_ldos_raw = (f_up - f_dn) if (self.show_mag and f_dn is not None) else (f_up + f_dn if f_dn is not None else f_up)
+            partitions = self._get_partitions(f_ldos_raw)
         else:
             f_ldos_raw = None
+            partitions = []
 
         if self.mode == 'Line':
             active_idx = int(self.marker_ratios[min(self.active_marker_idx, len(self.marker_ratios)-1)] * (self.npts - 1))
-            active_ldos = f_ldos_raw[active_idx]
+            active_ldos = f_ldos_raw[active_idx] if f_ldos_raw is not None else np.zeros_like(self.cached_spec_ldos[0])
         else:
             active_idx = min(self.active_marker_idx, len(self.marker_coords)-1)
             active_ldos = self.cached_spec_ldos[active_idx]
@@ -552,90 +587,186 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
                 self.ax_spec.axvline(x=e_val, color='black', linestyle='-', lw=2, picker=5, label=f'emarker_{i}')
 
         if self.mode == 'Line':
-            self.ax_ldos.clear(); self.ax_prof.clear(); self.ax_stripe.clear(); self.cax.clear()
-            f_ldos_total = np.sum(f_ldos_raw, axis=(2, 3))
-            if self.normalize: f_ldos_total /= (np.trapezoid(f_ldos_total, x=self.cached_eg, axis=1)[:, None] + 1e-15)
+            if hasattr(self, 'line_decomp_axes'): 
+                for ax in self.line_decomp_axes:
+                    if ax in self.fig.axes: ax.remove()
+            self.ax_prof.clear()
+            if getattr(self, 'ax_ldos', None) and self.ax_ldos in self.fig.axes: self.ax_ldos.remove(); self.ax_ldos = None
+            if getattr(self, 'ax_stripe', None) and self.ax_stripe in self.fig.axes: self.ax_stripe.remove(); self.ax_stripe = None
+            if getattr(self, 'cax', None) and self.cax in self.fig.axes: self.cax.remove(); self.cax = None
+            import matplotlib.ticker as ticker
+            self.line_decomp_axes = []
+            
+            processed_partitions = []
+            global_vmax = 0.0
+            for p_label, p_data in partitions:
+                t_data = p_data.copy()
+                if self.normalize: t_data /= (np.trapezoid(t_data, x=self.cached_eg, axis=1)[:, None] + 1e-15)
+                processed_partitions.append((p_label, t_data))
+                v_max = np.max(np.abs(t_data))
+                if v_max > global_vmax: global_vmax = v_max
+            if global_vmax == 0: global_vmax = 1e-15
+            
+            num_p = max(1, len(partitions))
+            if self.show_dcmp_norm:
+                w_ratios = [0.08 * num_p] + [2, 0.05 * num_p, 0.15 * num_p] * num_p
+            else:
+                w_ratios = [0.08 * num_p] + [2, 0.0, 0.0] * (num_p - 1) + [2, 0.05 * num_p, 0.0]
+            lgs = gridspec.GridSpecFromSubplotSpec(1, 1 + num_p*3, subplot_spec=self.gs[0, 1], width_ratios=w_ratios, wspace=0.1)
+            
+            self.ax_stripe = self.fig.add_subplot(lgs[0])
+            self.line_decomp_axes.append(self.ax_stripe)
+            
             lc = LineCollection(np.array([np.array([np.zeros_like(p_dist), p_dist]).T[:-1], np.array([np.zeros_like(p_dist), p_dist]).T[1:]]).transpose(1, 0, 2), cmap=self.cmap_topo, norm=plt.Normalize(self.current_z_line.min(), self.current_z_line.max()), linewidth=40)
             lc.set_array(self.current_z_line[:-1]); self.ax_stripe.add_collection(lc)
             self.ax_stripe.set(xlim=(-0.1, 0.1), ylim=(0, p_len)); self.ax_stripe.set_xticks([])
-            
-            if self.show_mag and f_dn is not None:
-                v_max = np.max(np.abs(f_ldos_total)); mesh = self.ax_ldos.pcolormesh(self.cached_eg, p_dist, f_ldos_total, cmap='bwr', shading='auto', vmin=-v_max, vmax=v_max)
-            else:
-                mesh = self.ax_ldos.pcolormesh(self.cached_eg, p_dist, f_ldos_total, cmap='jet', shading='auto')
-            self.ax_ldos.set_title("LDOS")
-            self.ax_ldos.set_yticks([])
-            self.fig.colorbar(mesh, cax=self.cax)
             self.ax_prof.plot(p_dist, self.current_z_line, 'k-', lw=1.5); self.ax_prof.set(ylabel="Height (Å)", title="Tip Height", xlabel="Dist (Å)")
             
-            for i, r in enumerate(self.marker_ratios):
-                idx = int(r * (self.npts - 1)); color = self.m_colors[i % len(self.m_colors)]
-                self.ax_prof.axvline(x=p_dist[idx], color=color, ls='--', lw=2, alpha=0.7, picker=5, label=f'marker_{i}')
-                for ax in [self.ax_ldos, self.ax_stripe]:
-                    ax.axhline(y=p_dist[idx], color=color, ls='--', lw=2, alpha=0.7, picker=5, label=f'marker_{i}')
+            for p_idx, (p_label, t_data) in enumerate(processed_partitions):
+                ax_l = self.fig.add_subplot(lgs[1 + p_idx*3])
+                cax_l = self.fig.add_subplot(lgs[2 + p_idx*3])
+                self.line_decomp_axes.extend([ax_l, cax_l])
+                
+                v_max = np.max(np.abs(t_data)) if self.show_dcmp_norm else global_vmax
+                if v_max == 0: v_max = 1e-15
+                
+                if self.show_mag and f_dn is not None:
+                    mesh = ax_l.pcolormesh(self.cached_eg, p_dist, t_data, cmap='bwr', shading='auto', vmin=-v_max, vmax=v_max)
+                else:
+                    mesh = ax_l.pcolormesh(self.cached_eg, p_dist, t_data, cmap='jet', shading='auto', vmin=0, vmax=v_max)
+                
+                if self.plot_level >= 3:
+                    ax_l.set_title(p_label.split()[-1], fontsize=10)
+                else:
+                    ax_l.set_title(f"LDOS: {p_label}", fontsize=10)
+                ax_l.set_yticks([])
+                
+                if self.show_dcmp_norm or p_idx == num_p - 1:
+                    cb = self.fig.colorbar(mesh, cax=cax_l)
+                    exp = int(np.floor(np.log10(v_max)))
+                    cb.ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, pos, e=exp: f"{x / (10**e):.1f}"))
+                    cax_l.set_title(f"1e{exp}", fontsize=10)
+                else:
+                    cax_l.axis('off')
+                
+                for i, r in enumerate(self.marker_ratios):
+                    idx = int(r * (self.npts - 1)); color = self.m_colors[i % len(self.m_colors)]
+                    if p_idx == 0: self.ax_prof.axvline(x=p_dist[idx], color=color, ls='--', lw=2, alpha=0.7, picker=5, label=f'marker_{i}')
+                    ax_l.axhline(y=p_dist[idx], color=color, ls='--', lw=2, alpha=0.7, picker=5, label=f'marker_{i}')
+                    if p_idx == 0: self.ax_stripe.axhline(y=p_dist[idx], color=color, ls='--', lw=2, alpha=0.7, picker=5, label=f'marker_{i}')
+
+            if self.plot_level >= 3:
+                ax_super = self.fig.add_subplot(self.gs[0, 1])
+                ax_super.axis('off')
+                ax_super.set_title(f"LDOS: {self.active_element}", fontsize=12, pad=20)
+                self.line_decomp_axes.append(ax_super)
 
         elif self.mode == 'Map':
-            f_ldos_total = f_ldos_raw.copy()
-            if self.normalize: f_ldos_total /= (np.trapezoid(f_ldos_total, x=self.cached_eg, axis=1)[:, None] + 1e-15)
-            f_ldos_total = np.nan_to_num(f_ldos_total, nan=0.0, posinf=0.0, neginf=0.0)
-            if len(self.map_axes) != nepts or full_refresh:
-                for ax in self.map_axes: ax.remove()
+            num_p = max(1, len(partitions))
+            if len(self.map_axes) != nepts * num_p or full_refresh:
+                for ax in self.map_axes:
+                    if ax in self.fig.axes: ax.remove()
                 self.map_axes.clear()
-                sub_gs = gridspec.GridSpecFromSubplotSpec(1, nepts, subplot_spec=self.gs[1, :], wspace=0.1)
-                for i in range(nepts): self.map_axes.append(self.fig.add_subplot(sub_gs[0, i]))
+                sub_gs = gridspec.GridSpecFromSubplotSpec(num_p, nepts, subplot_spec=self.gs[1, :], wspace=0.1, hspace=0.2)
+                for r in range(num_p):
+                    for c in range(nepts): self.map_axes.append(self.fig.add_subplot(sub_gs[r, c]))
 
             if not hasattr(self, 'map_e_targets') or len(self.map_e_targets) != nepts or full_refresh:
                 self.map_e_targets = np.linspace(self.s_emin.val, self.s_emax.val, nepts)
-            v_max = np.max(np.abs(f_ldos_total)) if self.show_mag else None
             m_coords_np = np.array(self.marker_coords)
 
-            for i, target_e in enumerate(self.map_e_targets):
-                ax = self.map_axes[i]
-                ax.clear()
-                e_idx = np.abs(self.cached_eg - target_e).argmin()
-                slice_data = f_ldos_total[:, e_idx]
-
-                for nx in range(2):
-                    for ny in range(2):
-                        off = nx * self.lv[0, :2] + ny * self.lv[1, :2]
-                        if self.show_mag and f_dn is not None:
-                            ax.tricontourf(self.grid_xy[:,0] + off[0], self.grid_xy[:,1] + off[1], slice_data, levels=40, cmap='bwr', vmin=-v_max, vmax=v_max)
-                        else:
-                            ax.tricontourf(self.grid_xy[:,0] + off[0], self.grid_xy[:,1] + off[1], slice_data, levels=40, cmap='jet')
+            processed_partitions = []
+            global_vmax = 0.0
+            for p_label, p_data in partitions:
+                t_data = p_data.copy()
+                if self.normalize: t_data /= (np.trapezoid(t_data, x=self.cached_eg, axis=1)[:, None] + 1e-15)
+                t_data = np.nan_to_num(t_data, nan=0.0, posinf=0.0, neginf=0.0)
+                processed_partitions.append((p_label, t_data))
+                v_max = np.max(np.abs(t_data))
+                if v_max > global_vmax: global_vmax = v_max
+            if global_vmax == 0: global_vmax = 1e-15
+            
+            for p_idx, (p_label, t_data) in enumerate(processed_partitions):
+                v_max = np.max(np.abs(t_data)) if self.show_dcmp_norm else global_vmax
+                if v_max == 0: v_max = 1e-15
                 
-                ax.scatter(m_coords_np[:, 0], m_coords_np[:, 1], color=self.m_colors[:len(m_coords_np)], s=30, edgecolors='white', zorder=5)
-                ax.set_title(f"E = {self.cached_eg[e_idx]:.3f} eV", fontsize=10)
-                ax.set_aspect('equal'); ax.set_xticks([]); ax.set_yticks([])
+                for i, target_e in enumerate(self.map_e_targets):
+                    ax = self.map_axes[p_idx * nepts + i]
+                    ax.clear()
+                    e_idx = np.abs(self.cached_eg - target_e).argmin()
+                    slice_data = t_data[:, e_idx]
+
+                    for nx in range(2):
+                        for ny in range(2):
+                            off = nx * self.lv[0, :2] + ny * self.lv[1, :2]
+                            if self.show_mag and f_dn is not None:
+                                ax.tricontourf(self.grid_xy[:,0] + off[0], self.grid_xy[:,1] + off[1], slice_data, levels=40, cmap='bwr', vmin=-v_max, vmax=v_max)
+                            else:
+                                ax.tricontourf(self.grid_xy[:,0] + off[0], self.grid_xy[:,1] + off[1], slice_data, levels=40, cmap='jet', vmin=0, vmax=v_max)
+                    
+                    ax.scatter(m_coords_np[:, 0], m_coords_np[:, 1], color=self.m_colors[:len(m_coords_np)], s=30, edgecolors='white', zorder=5)
+                    title_str = f"E = {self.cached_eg[e_idx]:.3f} eV" if p_idx == 0 else ""
+                    if self.plot_level >= 3:
+                        ylabel_str = p_label.split()[-1] if i == 0 else ""
+                    else:
+                        ylabel_str = p_label if i == 0 else ""
+                    ax.set_title(title_str, fontsize=10)
+                    if ylabel_str: ax.set_ylabel(ylabel_str, fontsize=10)
+                    ax.set_aspect('equal'); ax.set_xticks([]); ax.set_yticks([])
+
+            if self.plot_level >= 3:
+                ax_super = self.fig.add_subplot(self.gs[1, :])
+                ax_super.axis('off')
+                ax_super.set_title(f"LDOS: {self.active_element}", fontsize=12, pad=25)
+                self.map_axes.append(ax_super)
 
         self.fig.canvas.draw_idle()
 
     def _redraw_map_slice(self, i):
-        ax = self.map_axes[i]
-        ax.clear()
         target_e = self.map_e_targets[i]
         e_idx = np.abs(self.cached_eg - target_e).argmin()
-        
         f_up, f_dn = self.cached_ld_up.copy(), (self.cached_ld_dn.copy() if self.cached_ld_dn is not None else None)
         f_ldos_raw = (f_up - f_dn) if (self.show_mag and f_dn is not None) else (f_up + f_dn if f_dn is not None else f_up)
-        f_ldos_total = f_ldos_raw.copy()
-        if self.normalize: f_ldos_total /= (np.trapezoid(f_ldos_total, x=self.cached_eg, axis=1)[:, None] + 1e-15)
-        f_ldos_total = np.nan_to_num(f_ldos_total, nan=0.0, posinf=0.0, neginf=0.0)
+        partitions = self._get_partitions(f_ldos_raw)
         
-        slice_data = f_ldos_total[:, e_idx]
-        v_max = np.max(np.abs(f_ldos_total)) if self.show_mag else None
         m_coords_np = np.array(self.marker_coords)
-
-        for nx in range(2):
-            for ny in range(2):
-                off = nx * self.lv[0, :2] + ny * self.lv[1, :2]
-                if self.show_mag and f_dn is not None:
-                    ax.tricontourf(self.grid_xy[:,0] + off[0], self.grid_xy[:,1] + off[1], slice_data, levels=40, cmap='bwr', vmin=-v_max, vmax=v_max)
-                else:
-                    ax.tricontourf(self.grid_xy[:,0] + off[0], self.grid_xy[:,1] + off[1], slice_data, levels=40, cmap='jet')
+        nepts = len(self.map_e_targets)
         
-        ax.scatter(m_coords_np[:, 0], m_coords_np[:, 1], color=self.m_colors[:len(m_coords_np)], s=30, edgecolors='white', zorder=5)
-        ax.set_title(f"E = {self.cached_eg[e_idx]:.3f} eV", fontsize=10)
-        ax.set_aspect('equal'); ax.set_xticks([]); ax.set_yticks([])
+        processed_partitions = []
+        global_vmax = 0.0
+        for p_label, p_data in partitions:
+            t_data = p_data.copy()
+            if self.normalize: t_data /= (np.trapezoid(t_data, x=self.cached_eg, axis=1)[:, None] + 1e-15)
+            t_data = np.nan_to_num(t_data, nan=0.0, posinf=0.0, neginf=0.0)
+            processed_partitions.append((p_label, t_data))
+            v_max = np.max(np.abs(t_data))
+            if v_max > global_vmax: global_vmax = v_max
+        if global_vmax == 0: global_vmax = 1e-15
+        
+        for p_idx, (p_label, t_data) in enumerate(processed_partitions):
+            ax = self.map_axes[p_idx * nepts + i]
+            ax.clear()
+            v_max = np.max(np.abs(t_data)) if self.show_dcmp_norm else global_vmax
+            if v_max == 0: v_max = 1e-15
+            slice_data = t_data[:, e_idx]
+
+            for nx in range(2):
+                for ny in range(2):
+                    off = nx * self.lv[0, :2] + ny * self.lv[1, :2]
+                    if self.show_mag and f_dn is not None:
+                        ax.tricontourf(self.grid_xy[:,0] + off[0], self.grid_xy[:,1] + off[1], slice_data, levels=40, cmap='bwr', vmin=-v_max, vmax=v_max)
+                    else:
+                        ax.tricontourf(self.grid_xy[:,0] + off[0], self.grid_xy[:,1] + off[1], slice_data, levels=40, cmap='jet', vmin=0, vmax=v_max)
+            
+            ax.scatter(m_coords_np[:, 0], m_coords_np[:, 1], color=self.m_colors[:len(m_coords_np)], s=30, edgecolors='white', zorder=5)
+            title_str = f"E = {self.cached_eg[e_idx]:.3f} eV" if p_idx == 0 else ""
+            if self.plot_level >= 3:
+                ylabel_str = p_label.split()[-1] if i == 0 else ""
+            else:
+                ylabel_str = p_label if i == 0 else ""
+            ax.set_title(title_str, fontsize=10)
+            if ylabel_str: ax.set_ylabel(ylabel_str, fontsize=10)
+            ax.set_aspect('equal'); ax.set_xticks([]); ax.set_yticks([])
 
     def _on_pick(self, event):
         if event.artist == getattr(self, 'ends', None) and self.mode == 'Line': self.active_obj = ('end', event.ind[0])
@@ -707,7 +838,8 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
         self._update_all()
 
     def _on_ui_change(self, val):
-        self.show_atoms, self.use_decay_ldos, self.normalize, self.show_mag, self.show_unit_cell = self.chk.get_status()
+        states = self.chk.get_status()
+        self.show_atoms, self.use_decay_ldos, self.normalize, self.show_mag, self.show_unit_cell, self.show_decomp, self.show_dcmp_norm = states[:7]
         self.display_cells = int(self.s_cell.val)
         
         new_count = int(self.s_num_marks.val)
@@ -729,7 +861,7 @@ class Interactive_STM_Simulator(Unified_STM_Simulator):
     def _on_rel(self, event): self.active_obj = None
 
 if __name__ == "__main__":
-    v_dir = r'dir'
+    v_dir = r'C:/dir'
     # Initialized without hardcoded path or marker indices
     sim = Interactive_STM_Simulator(v_dir, [-2.525, -1.3], 1.3, LinearSegmentedColormap.from_list("t", ["black", "firebrick", "yellow"]))
     sim.run_interactive(grid_res=64, topo_bias=0.2, topo_height=2.5, ldos_bias_sign='neg', use_decay_topo=True)
